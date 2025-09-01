@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# load .env if present
+if [[ -f .env ]]; then
+  # shellcheck disable=SC2046
+  export $(grep -v '^\s*#' .env | grep -v '^\s*$' | xargs -d '\n')
+fi
+
+IMAGE_TAG="${IMAGE_TAG:-iac-dev:latest}"
+BASE_IMAGE="${BASE_IMAGE:-debian:bookworm-slim}"
+EXTRA_APT="${EXTRA_APT:-}"
+
+echo "[*] Building image ${IMAGE_TAG}..."
+docker build \
+  --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+  --build-arg EXTRA_APT="${EXTRA_APT}" \
+  -t "${IMAGE_TAG}" .
+
+container="iac-$(date +%s)-$RANDOM"
+echo "[*] Running ephemeral container ${container}..."
+
+runargs=(
+  --rm -it --name "${container}"
+  -e GIT_REPOS="${GIT_REPOS:-}"
+  -e DOTFILES_REPO="${DOTFILES_REPO:-}"
+  -e DOTFILES_METHOD="${DOTFILES_METHOD:-copy}"
+  -e DOTFILES_PACKAGES="${DOTFILES_PACKAGES:-}"
+  -e DEBUG_COMMAND="${DEBUG_COMMAND:-python3 -m http.server 8000}"
+  -e TMUX_SESSION="${TMUX_SESSION:-dev}"
+)
+
+# SSH agent forwarding if available
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+  runargs+=( -e SSH_AUTH_SOCK=/ssh-agent -v "${SSH_AUTH_SOCK}:/ssh-agent:ro" )
+fi
+
+# Mount secrets dir if it exists
+if [[ -n "${SECRETS_DIR:-}" && -d "${SECRETS_DIR}" ]]; then
+  runargs+=( -v "${SECRETS_DIR}:/secrets:ro" )
+fi
+
+# Last resort: pass GH token if exported (do NOT bake into image)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  runargs+=( -e GITHUB_TOKEN )
+fi
+
+exec docker run "${runargs[@]}" "${IMAGE_TAG}"
+
