@@ -19,6 +19,8 @@ echo "[*] Building image ${IMAGE_TAG}..."
 docker build \
   --build-arg BASE_IMAGE="${BASE_IMAGE}" \
   --build-arg EXTRA_APT="${EXTRA_APT}" \
+  --build-arg NVIM_VERSION="${NVIM_VERSION:-0.10.2}" \
+  --build-arg NVIM_INSTALL_METHOD="${NVIM_INSTALL_METHOD:-appimage}" \
   -t "${IMAGE_TAG}" .
 
 container="iac-$(date +%s)-$RANDOM"
