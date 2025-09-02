@@ -24,6 +24,15 @@ home="${HOME_DIR}"
 mkdir -p "${home}/.config" "${home}/.ssh" "/workspace"
 chmod 700 "${home}/.ssh"
 
+# near the top of bootstrap.sh, after HOME/USER is resolved
+REQ_NVIM="${NVIM_VERSION:-}"
+if command -v nvim >/dev/null 2>&1 && [ -n "$REQ_NVIM" ]; then
+  if ! nvim --version | head -n1 | grep -q "NVIM v${REQ_NVIM}"; then
+    echo "[!] Neovim version mismatch. Wanted ${REQ_NVIM}, got: $(nvim --version | head -n1)"
+    exit 1
+  fi
+fi
+
 # Pre-populate known_hosts for common forges to avoid interactive prompts - SSH host keys so first git clone doesn't prompt
 ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null >> "${home}/.ssh/known_hosts" || true
 chmod 600 "${home}/.ssh/known_hosts" || true
