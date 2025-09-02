@@ -11,8 +11,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 LANG=C.UTF-8 \
     PATH=/home/${USERNAME}/.local/bin:$PATH
 
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     ca-certificates curl git tmux neovim ripgrep fd-find jq python3 python3-pip openssh-client \
+#     && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git tmux neovim ripgrep fd-find jq python3 python3-pip openssh-client \
+    ca-certificates curl git tmux neovim ripgrep fd-find jq python3 openssh-client stow python3-debugpy \
     && rm -rf /var/lib/apt/lists/*
 
 # optional extra packages baked into the image
@@ -26,9 +29,12 @@ RUN groupadd -g ${GID} ${USERNAME} && useradd -m -u ${UID} -g ${GID} -s /bin/bas
 
 WORKDIR /workspace
 
-# tiny quality-of-life: debugpy and yq
-RUN python3 -m pip install --no-cache-dir debugpy pipx && pipx ensurepath && \
-    curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
+# # tiny quality-of-life: debugpy and yq
+# RUN python3 -m pip install --no-cache-dir debugpy pipx && pipx ensurepath && \
+#     curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
+#     chmod +x /usr/local/bin/yq
+# tiny quality-of-life: yq (binary release)
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
     chmod +x /usr/local/bin/yq
 
 # defaults for tmux and nvim
