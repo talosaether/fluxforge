@@ -49,5 +49,17 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   runargs+=( -e GITHUB_TOKEN )
 fi
 
+# Look for SSH agent
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+  runargs+=( -e SSH_AUTH_SOCK=/ssh-agent -v "${SSH_AUTH_SOCK}:/ssh-agent:ro" )
+  echo "[*] SSH agent detected; forwarding socket."
+else
+  echo "[!] No SSH agent detected. Private repos over SSH will fail."
+fi
+
+# todo: Windows note for Docker Desktop: if you use Windows OpenSSH agent, you can map the named pipe:
+# -v //./pipe/openssh-ssh-agent:/ssh-agent
+# -e SSH_AUTH_SOCK=/ssh-agent
+
 exec docker run "${runargs[@]}" "${IMAGE_TAG}"
 
