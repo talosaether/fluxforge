@@ -1,14 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# user="${USER:-dev}"
+# home="/home/${user}"
 
-user="${USER:-dev}"
-home="/home/${user}"
+# Resolve user and home even if env isn't populated
+USER_NAME="${USER-}"
+if [[ -z "${USER_NAME}" ]]; then
+  USER_NAME="$(id -un 2>/dev/null || echo dev)"
+fi
+
+HOME_DIR="${HOME-}"
+if [[ -z "${HOME_DIR}" ]]; then
+  # Try to look up home from passwd; else fall back to /home/$USER_NAME
+  HOME_DIR="$(getent passwd "${USER_NAME}" 2>/dev/null | cut -d: -f6)"
+  HOME_DIR="${HOME_DIR:-/home/${USER_NAME}}"
+fi
+
+export USER="${USER_NAME}"
+export HOME="${HOME_DIR}"
+
+home="${HOME_DIR}"
 
 mkdir -p "${home}/.config" "${home}/.ssh" "/workspace"
 chmod 700 "${home}/.ssh"
 
-# Pre-populate known_hosts for common forges to avoid interactive prompts
-# SSH host keys so first git clone doesn't prompt
+# Pre-populate known_hosts for common forges to avoid interactive prompts - SSH host keys so first git clone doesn't prompt
 ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null >> "${home}/.ssh/known_hosts" || true
 chmod 600 "${home}/.ssh/known_hosts" || true
 

@@ -39,5 +39,8 @@ COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh && chown -R ${USERNAME}:${USERNAME} /workspace
 
 USER ${USERNAME}
+
+ENV USER=${USERNAME} HOME=/home/${USERNAME}
+
 ENTRYPOINT ["/usr/local/bin/bootstrap.sh"]
 
