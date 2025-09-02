@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# load .env safely (supports quotes, spaces, inline comments)
+if [ -f .env ]; then
+  # strip CRs in case the file came from Windows
+  sed -i 's/\r$//' .env
+  set -a
+  # shellcheck source=/dev/null
+  . ./.env
+  set +a
+fi
+
+IMAGE_TAG="${IMAGE_TAG:-iac-dev:latest}"
+BASE_IMAGE="${BASE_IMAGE:-debian:bookworm-slim}"
+EXTRA_APT="${EXTRA_APT:-}"
+
+echo "[*] Building image ${IMAGE_TAG}..."
+docker build \
+  --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+  --build-arg EXTRA_APT="${EXTRA_APT}" \
+  --build-arg NVIM_VERSION="${NVIM_VERSION:-0.10.2}" \
+  --build-arg NVIM_INSTALL_METHOD="${NVIM_INSTALL_METHOD:-appimage}" \
+  -t "${IMAGE_TAG}" .
+
+container="iac-$(date +%s)-$RANDOM"
+echo "[*] Running ephemeral container ${container}..."
+
+runargs=(
+  --rm -it --name "${container}"
+  -e GIT_REPOS="${GIT_REPOS:-}"
+  -e DOTFILES_REPO="${DOTFILES_REPO:-}"
+  -e DOTFILES_METHOD="${DOTFILES_METHOD:-copy}"
+  -e DOTFILES_PACKAGES="${DOTFILES_PACKAGES:-}"
+  -e DEBUG_COMMAND="${DEBUG_COMMAND:-python3 -m http.server 8000}"
+  -e TMUX_SESSION="${TMUX_SESSION:-dev}"
+)
+
+# SSH agent forwarding if available
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+  runargs+=( -e SSH_AUTH_SOCK=/ssh-agent -v "${SSH_AUTH_SOCK}:/ssh-agent:ro" )
+fi
+
+# Mount secrets dir if it exists
+if [[ -n "${SECRETS_DIR:-}" && -d "${SECRETS_DIR}" ]]; then
+  runargs+=( -v "${SECRETS_DIR}:/secrets:ro" )
+fi
+
+# Last resort: pass GH token if exported (do NOT bake into image)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  runargs+=( -e GITHUB_TOKEN )
+fi
+
+# Look for SSH agent
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+  runargs+=( -e SSH_AUTH_SOCK=/ssh-agent -v "${SSH_AUTH_SOCK}:/ssh-agent:ro" )
+  echo "[*] SSH agent detected; forwarding socket."
+else
+  echo "[!] No SSH agent detected. Private repos over SSH will fail."
+fi
+
+# todo: Windows note for Docker Desktop: if you use Windows OpenSSH agent, you can map the named pipe:
+# -v //./pipe/openssh-ssh-agent:/ssh-agent
+# -e SSH_AUTH_SOCK=/ssh-agent
+
+exec docker run "${runargs[@]}" "${IMAGE_TAG}"
+
