@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# load .env if present
-if [[ -f .env ]]; then
-  # shellcheck disable=SC2046
-  export $(grep -v '^\s*#' .env | grep -v '^\s*$' | xargs -d '\n')
+# load .env safely (supports quotes, spaces, inline comments)
+if [ -f .env ]; then
+  # strip CRs in case the file came from Windows
+  sed -i 's/\r$//' .env
+  set -a
+  # shellcheck source=/dev/null
+  . ./.env
+  set +a
 fi
 
 IMAGE_TAG="${IMAGE_TAG:-iac-dev:latest}"
