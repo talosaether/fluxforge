@@ -94,9 +94,11 @@ if [[ -n "${DOTFILES_REPO:-}" ]]; then
   clone_update_repo "${DOTFILES_REPO}" "${DOTS_DIR}" "${DOTFILES_REF:-}"
   METHOD="${DOTFILES_METHOD:-stow}"
 
-  if [[ "${METHOD}" == "stow" && ! $(command -v stow || true) ]]; then
-    echo "[!] stow not found; falling back to copy"
-    METHOD="copy"
+  if [[ "${METHOD}" == "stow" ]]; then
+    if ! command -v stow >/dev/null 2>&1; then
+      echo "[!] stow not found; falling back to copy"
+      METHOD="copy"
+    fi
   fi
 
   if [[ "${METHOD}" == "stow" ]]; then
@@ -147,15 +149,36 @@ fi
 # Ensure perms on home (harmless if already owned)
 chown -R "${USER_NAME}:${USER_NAME}" "${HOME}" 2>/dev/null || true
 
-# ---------- Clone requested repos into ephemeral workspace ----------
+# ---------- Clone requested repos into ephemeral workspace (supports @branch and depth) ----------
+GIT_DEPTH="${GIT_DEPTH:-1}"
+
 IFS=',' read -ra repos <<< "${GIT_REPOS:-}"
 for spec in "${repos[@]}"; do
   [[ -z "${spec}" ]] && continue
-  name="$(basename "${spec%%@*}" .git)"
+
+  url="${spec%%@*}"
+  ref=""
+  if [[ "${spec}" == *"@"* ]]; then
+    ref="${spec##*@}"
+  fi
+
+  name="$(basename "${url}" .git)"
   dest="/workspace/${name}"
+
   if [[ ! -d "${dest}/.git" ]]; then
-    echo "[*] Cloning ${spec} -> ${dest}"
-    git clone --depth 1 "${spec%%@*}" "${dest}" || true
+    echo "[*] Cloning ${url} -> ${dest} ${ref:+(branch ${ref})}"
+    if [[ -n "${ref}" ]]; then
+      git clone --depth "${GIT_DEPTH}" --branch "${ref}" "${url}" "${dest}" || {
+        # fallback: clone default then fetch the branch
+        git clone --depth "${GIT_DEPTH}" "${url}" "${dest}" && \
+        git -C "${dest}" fetch --depth "${GIT_DEPTH}" origin "${ref}" && \
+        git -C "${dest}" switch -c "${ref}" --track "origin/${ref}"
+      }
+      # make future fetches aware of the branch
+      git -C "${dest}" remote set-branches --add origin "${ref}" || true
+    else
+      git clone --depth "${GIT_DEPTH}" "${url}" "${dest}"
+    fi
   fi
 done
 
