@@ -1,5 +1,0 @@
-# todo:
-- lsp
-- autocomplete
-- suggestions
-
