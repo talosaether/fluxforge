@@ -132,8 +132,12 @@ fi
 TMUX_CONF=""
 [[ -f "$HOME/.tmux.conf" ]] && TMUX_CONF="$HOME/.tmux.conf"
 [[ -z "$TMUX_CONF" && -f "$HOME/.config/tmux/tmux.conf" ]] && TMUX_CONF="$HOME/.config/tmux/tmux.conf"
+
 if [[ -n "$TMUX_CONF" ]]; then
-  dshell="$(grep -E '^\s*set(-option)?\s+-g\s+default-shell' "$TMUX_CONF" 2>/dev/null | awk '{print $NF}' | tr -d '"'"')"
+  # Grab the last field on the default-shell line and strip surrounding quotes, if any
+  dshell="$(awk '/^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+default-shell/ {print $NF}' "$TMUX_CONF" 2>/dev/null \
+            | sed -e "s/^['\"]//" -e "s/['\"]$//" \
+            | head -n1)"
   [[ -n "$dshell" && ! -x "$dshell" ]] && export TMUX_FORCE_DEFAULT_SHELL="/bin/bash"
 fi
 
@@ -214,10 +218,6 @@ for spec in "${repos[@]}"; do
     fi
   fi
 done
-
-# Use a per-user tmux socket dir you can write to
-export TMUX_TMPDIR="${TMUX_TMPDIR:-$HOME/.tmux-tmp}"
-mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR" || true
 
 # ---------- Start tmux + debug server (bulletproof) ----------
 dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
