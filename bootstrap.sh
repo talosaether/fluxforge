@@ -199,36 +199,43 @@ for spec in "${repos[@]}"; do
   fi
 done
 
-# ---------- Start tmux + debug server (robust) ----------
+# ---------- Start tmux + debug server (bulletproof) ----------
 dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
 session="${TMUX_SESSION:-dev}"
 
-# Ensure sane SHELL/TERM so tmux doesn't implode
+# Ensure /tmp exists and is writable for the tmux socket
+mkdir -p /tmp && chmod 1777 /tmp
+
+# Sanity: tmux installed?
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "[!] tmux not found in PATH"; exit 1
+fi
+
+# Minimal env so tmux doesn't choke
 export SHELL="${SHELL:-/bin/bash}"
 export TERM="${TERM:-xterm-256color}"
 
-# Always start a server with an empty config so bad user configs don't kill it
-tmux -f /dev/null start-server 2>/dev/null || true
+# Start a server that ignores user config (prevents bad configs from killing it)
+tmux -f /dev/null start-server >/dev/null 2>&1 || true
 
-# Seed environment into the server before creating windows
-tmux set-environment -g SSH_AUTH_SOCK "${SSH_AUTH_SOCK:-}" 2>/dev/null || true
-tmux set-environment -g USER "${USER}"
-tmux set-environment -g HOME "${HOME}"
-tmux set-environment -g PATH "${PATH}"
+# Seed env into server if it's running
+tmux set-environment -g SSH_AUTH_SOCK "${SSH_AUTH_SOCK:-}" >/dev/null 2>&1 || true
+tmux set-environment -g USER "${USER}" >/dev/null 2>&1 || true
+tmux set-environment -g HOME "${HOME}" >/dev/null 2>&1 || true
+tmux set-environment -g PATH "${PATH}" >/dev/null 2>&1 || true
 
 # Create session if missing
-if ! tmux has-session -t "${session}" 2>/dev/null; then
+if ! tmux has-session -t "${session}" >/dev/null 2>&1; then
   tmux new-session -d -s "${session}" -n editor "cd /workspace && nvim"
   tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
 fi
 
-# Try to source user tmux config; if it fails, keep going with defaults
+# Try to source user config; don't die if it's spicy
 if [[ -f "${HOME}/.tmux.conf" ]]; then
-  tmux source-file "${HOME}/.tmux.conf" 2>/dev/null || echo "[!] tmux.conf had errors; continuing with defaults"
+  tmux source-file "${HOME}/.tmux.conf" >/dev/null 2>&1 || echo "[!] tmux.conf errors; using defaults"
 elif [[ -f "${HOME}/.config/tmux/tmux.conf" ]]; then
-  tmux source-file "${HOME}/.config/tmux/tmux.conf" 2>/dev/null || echo "[!] tmux XDG config had errors; defaults used"
+  tmux source-file "${HOME}/.config/tmux/tmux.conf" >/dev/null 2>&1 || echo "[!] tmux XDG config errors; using defaults"
 fi
 
-# Final attach
 exec tmux attach -t "${session}"
 
