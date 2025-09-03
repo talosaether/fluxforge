@@ -199,17 +199,18 @@ for spec in "${repos[@]}"; do
   fi
 done
 
+
+# Use a per-user tmux socket dir you can write to
+export TMUX_TMPDIR="${TMUX_TMPDIR:-$HOME/.tmux-tmp}"
+mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR" || true
+
 # ---------- Start tmux + debug server (bulletproof) ----------
 dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
 session="${TMUX_SESSION:-dev}"
 
-# Ensure /tmp exists and is writable for the tmux socket
-mkdir -p /tmp && chmod 1777 /tmp
-
-# Sanity: tmux installed?
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "[!] tmux not found in PATH"; exit 1
-fi
+# Make sure tmux has a writable socket directory (stop touching /tmp)
+export TMUX_TMPDIR="${TMUX_TMPDIR:-$HOME/.tmux-tmp}"
+mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR" || true
 
 # Minimal env so tmux doesn't choke
 export SHELL="${SHELL:-/bin/bash}"
