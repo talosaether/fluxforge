@@ -120,6 +120,23 @@ if [[ -n "${DOTFILES_REPO:-}" ]]; then
   fi
 fi
 
+# --- tmux preflight: ensure TPM and sane paths ---
+export TMUX_PLUGIN_MANAGER_PATH="${TMUX_PLUGIN_MANAGER_PATH:-$HOME/.tmux/plugins}"
+
+if [[ ! -x "$TMUX_PLUGIN_MANAGER_PATH/tpm/tpm" ]]; then
+  echo "[*] Installing TPM"
+  git clone --depth 1 https://github.com/tmux-plugins/tpm "$TMUX_PLUGIN_MANAGER_PATH/tpm" || true
+fi
+
+# If your tmux.conf hardcodes a default-shell that isn't installed, avoid crashy panes
+TMUX_CONF=""
+[[ -f "$HOME/.tmux.conf" ]] && TMUX_CONF="$HOME/.tmux.conf"
+[[ -z "$TMUX_CONF" && -f "$HOME/.config/tmux/tmux.conf" ]] && TMUX_CONF="$HOME/.config/tmux/tmux.conf"
+if [[ -n "$TMUX_CONF" ]]; then
+  dshell="$(grep -E '^\s*set(-option)?\s+-g\s+default-shell' "$TMUX_CONF" 2>/dev/null | awk '{print $NF}' | tr -d '"'"')"
+  [[ -n "$dshell" && ! -x "$dshell" ]] && export TMUX_FORCE_DEFAULT_SHELL="/bin/bash"
+fi
+
 # ---------- Minimal defaults if dotfiles didn't supply tmux/nvim ----------
 # tmux
 if [[ ! -f "${HOME}/.tmux.conf" && ! -f "${HOME}/.config/tmux/tmux.conf" ]]; then
@@ -153,7 +170,6 @@ fi
 
 # Ensure perms on home (harmless if already owned)
 chown -R "${USER_NAME}:${USER_NAME}" "${HOME}" 2>/dev/null || true
-
 
 # ---------- Clone requested repos into ephemeral workspace (supports @branch and #branch) ----------
 GIT_DEPTH="${GIT_DEPTH:-1}"
@@ -199,7 +215,6 @@ for spec in "${repos[@]}"; do
   fi
 done
 
-
 # Use a per-user tmux socket dir you can write to
 export TMUX_TMPDIR="${TMUX_TMPDIR:-$HOME/.tmux-tmp}"
 mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR" || true
@@ -231,11 +246,16 @@ if ! tmux has-session -t "${session}" >/dev/null 2>&1; then
   tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
 fi
 
-# Try to source user config; don't die if it's spicy
-if [[ -f "${HOME}/.tmux.conf" ]]; then
-  tmux source-file "${HOME}/.tmux.conf" >/dev/null 2>&1 || echo "[!] tmux.conf errors; using defaults"
-elif [[ -f "${HOME}/.config/tmux/tmux.conf" ]]; then
-  tmux source-file "${HOME}/.config/tmux/tmux.conf" >/dev/null 2>&1 || echo "[!] tmux XDG config errors; using defaults"
+# seed plugin path and fallback shell into server env
+tmux set-environment -g TMUX_PLUGIN_MANAGER_PATH "${TMUX_PLUGIN_MANAGER_PATH}" >/dev/null 2>&1 || true
+[[ -n "${TMUX_FORCE_DEFAULT_SHELL:-}" ]] && tmux set -g default-shell "${TMUX_FORCE_DEFAULT_SHELL}" >/dev/null 2>&1 || true
+
+# source user config
+tmux source-file "${TMUX_CONF}" >/dev/null 2>&1 || echo "[!] tmux config had errors; using defaults"
+
+# install plugins now that TPM exists
+if [[ -x "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" ]]; then
+  tmux run-shell "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" >/dev/null 2>&1 || true
 fi
 
 exec tmux attach -t "${session}"
