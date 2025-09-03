@@ -53,8 +53,8 @@ else
   echo "[!] No SSH agent detected. Private repos over SSH will fail."
 fi
 
-# ---- Secrets mount (prefers ~/.fluxforge/secrets if SECRETS_DIR not set) ----
-DEFAULT_SECRETS_DIR="${HOME}/.fluxforge/secrets"
+# ---- Secrets mount (prefers ~/.dev-secrets if SECRETS_DIR not set) ----
+DEFAULT_SECRETS_DIR="${HOME}/.dev-secrets"
 SECRETS_DIR_EFFECTIVE="${SECRETS_DIR:-$DEFAULT_SECRETS_DIR}"
 if [[ -d "${SECRETS_DIR_EFFECTIVE}" ]]; then
   runargs+=( -v "${SECRETS_DIR_EFFECTIVE}:/secrets:ro" )
