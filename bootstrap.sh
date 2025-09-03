@@ -49,6 +49,17 @@ if [[ -d /secrets ]]; then
   chmod -R go-rwx "${HOME}/.secrets" || true
 fi
 
+# --- Codex/OpenAI key wiring ---
+# Prefer env, else read from secrets file (either location)
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  for p in "${HOME}/.secrets/openai_api_key" "/secrets/openai_api_key"; do
+    if [[ -f "$p" ]]; then
+      OPENAI_API_KEY="$(<"$p")"; export OPENAI_API_KEY
+      break
+    fi
+  done
+fi
+
 # ---------- HTTPS token helper (only if tokens are present) ----------
 if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITLAB_TOKEN:-}" || ( -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ) ]]; then
   install -m 0755 /dev/stdin "${HOME}/.local/bin/git-credential-passthru" <<'EOF'
@@ -275,6 +286,7 @@ tmux set-environment -g USER "${USER}" >/dev/null 2>&1 || true
 tmux set-environment -g HOME "${HOME}" >/dev/null 2>&1 || true
 tmux set-environment -g PATH "${PATH}" >/dev/null 2>&1 || true
 tmux set-environment -g TMUX_PLUGIN_MANAGER_PATH "${TMUX_PLUGIN_MANAGER_PATH}" >/dev/null 2>&1 || true
+[[ -n "${OPENAI_API_KEY:-}" ]] && tmux set-environment -g OPENAI_API_KEY "${OPENAI_API_KEY}" >/dev/null 2>&1 || true
 
 # Honor fallback shell if dotfiles pointed at a missing one
 [[ -n "${TMUX_FORCE_DEFAULT_SHELL:-}" ]] && tmux set -g default-shell "${TMUX_FORCE_DEFAULT_SHELL}" >/dev/null 2>&1 || true
