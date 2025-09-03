@@ -240,7 +240,7 @@ for spec in "${repos[@]}"; do
   fi
 done
 
-# ---------- Headless TPM plugin install (silent) ----------
+# ---------- Headless TPM plugin install (silent & robust) ----------
 export TMUX_TMPDIR="${TMUX_TMPDIR:-$HOME/.tmux-tmp}"
 mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR" || true
 
@@ -255,11 +255,13 @@ fi
 
 if [[ $missing -eq 1 && -x "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" ]]; then
   sock="tpm-setup"
-  TMUX_TMPDIR="$TMUX_TMPDIR" tmux -L "$sock" -f /dev/null new-session -d -s "$sock" "sleep 2"
+  # Keep the server alive for the whole install
+  TMUX_TMPDIR="$TMUX_TMPDIR" tmux -L "$sock" -f /dev/null new-session -d -s "$sock" \
+    "sh -c 'while :; do sleep 60; done'" >/dev/null 2>&1 || true
   TMUX_TMPDIR="$TMUX_TMPDIR" tmux -L "$sock" source-file "$TMUX_CONF" >/dev/null 2>&1 || true
   TMUX_PLUGIN_MANAGER_PATH="$TMUX_PLUGIN_MANAGER_PATH" TMUX_TMPDIR="$TMUX_TMPDIR" \
     tmux -L "$sock" run-shell "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" >/dev/null 2>&1 || true
-  tmux -L "$sock" kill-server
+  tmux -L "$sock" kill-server >/dev/null 2>&1 || true
 fi
 
 # ---------- Start tmux + debug server (quiet, resilient) ----------
