@@ -199,22 +199,36 @@ for spec in "${repos[@]}"; do
   fi
 done
 
-
-
-
-# ---------- Start tmux + debug server ----------
+# ---------- Start tmux + debug server (robust) ----------
 dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
 session="${TMUX_SESSION:-dev}"
 
-# Start tmux server, seed env, then create windows so panes inherit SSH_AUTH_SOCK etc.
-tmux start-server
+# Ensure sane SHELL/TERM so tmux doesn't implode
+export SHELL="${SHELL:-/bin/bash}"
+export TERM="${TERM:-xterm-256color}"
+
+# Always start a server with an empty config so bad user configs don't kill it
+tmux -f /dev/null start-server 2>/dev/null || true
+
+# Seed environment into the server before creating windows
 tmux set-environment -g SSH_AUTH_SOCK "${SSH_AUTH_SOCK:-}" 2>/dev/null || true
 tmux set-environment -g USER "${USER}"
 tmux set-environment -g HOME "${HOME}"
 tmux set-environment -g PATH "${PATH}"
 
-tmux new-session -d -s "${session}" -n editor "cd /workspace && nvim"
-tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
-tmux select-window -t "${session}:editor"
+# Create session if missing
+if ! tmux has-session -t "${session}" 2>/dev/null; then
+  tmux new-session -d -s "${session}" -n editor "cd /workspace && nvim"
+  tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
+fi
+
+# Try to source user tmux config; if it fails, keep going with defaults
+if [[ -f "${HOME}/.tmux.conf" ]]; then
+  tmux source-file "${HOME}/.tmux.conf" 2>/dev/null || echo "[!] tmux.conf had errors; continuing with defaults"
+elif [[ -f "${HOME}/.config/tmux/tmux.conf" ]]; then
+  tmux source-file "${HOME}/.config/tmux/tmux.conf" 2>/dev/null || echo "[!] tmux XDG config had errors; defaults used"
+fi
+
+# Final attach
 exec tmux attach -t "${session}"
 
