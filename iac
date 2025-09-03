@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# load .env safely (supports quotes, spaces, inline comments)
-if [ -f .env ]; then
-  # strip CRs in case the file came from Windows
-  sed -i 's/\r$//' .env
+# ---- load .env safely (supports quotes, spaces, inline comments) ----
+if [[ -f .env ]]; then
+  sed -i 's/\r$//' .env  # strip CRs in case the file came from Windows
   set -a
   # shellcheck source=/dev/null
   . ./.env
@@ -26,32 +25,27 @@ docker build \
 container="iac-$(date +%s)-$RANDOM"
 echo "[*] Running ephemeral container ${container}..."
 
+# Decide TTY flags: CI doesn't have a TTY
+if [ -t 1 ]; then
+  tty_flags=(-it)
+else
+  tty_flags=(-i)
+fi
+
 runargs=(
-  --rm -it --name "${container}"
+  --rm "${tty_flags[@]}" --name "${container}" --init
+  -v "$PWD:/workspace"
   -e GIT_REPOS="${GIT_REPOS:-}"
   -e DOTFILES_REPO="${DOTFILES_REPO:-}"
   -e DOTFILES_METHOD="${DOTFILES_METHOD:-copy}"
   -e DOTFILES_PACKAGES="${DOTFILES_PACKAGES:-}"
   -e DEBUG_COMMAND="${DEBUG_COMMAND:-python3 -m http.server 8000}"
   -e TMUX_SESSION="${TMUX_SESSION:-dev}"
+  -e GIT_DEPTH="${GIT_DEPTH:-1}"
+  -e GIT_AUTH_MODE="${GIT_AUTH_MODE:-ssh}"
 )
 
-# SSH agent forwarding if available
-if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
-  runargs+=( -e SSH_AUTH_SOCK=/ssh-agent -v "${SSH_AUTH_SOCK}:/ssh-agent:ro" )
-fi
-
-# Mount secrets dir if it exists
-if [[ -n "${SECRETS_DIR:-}" && -d "${SECRETS_DIR}" ]]; then
-  runargs+=( -v "${SECRETS_DIR}:/secrets:ro" )
-fi
-
-# Last resort: pass GH token if exported (do NOT bake into image)
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  runargs+=( -e GITHUB_TOKEN )
-fi
-
-# Look for SSH agent
+# ---- SSH agent forwarding (single, correct block) ----
 if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
   runargs+=( -e SSH_AUTH_SOCK=/ssh-agent -v "${SSH_AUTH_SOCK}:/ssh-agent:ro" )
   echo "[*] SSH agent detected; forwarding socket."
@@ -59,9 +53,25 @@ else
   echo "[!] No SSH agent detected. Private repos over SSH will fail."
 fi
 
-# todo: Windows note for Docker Desktop: if you use Windows OpenSSH agent, you can map the named pipe:
-# -v //./pipe/openssh-ssh-agent:/ssh-agent
-# -e SSH_AUTH_SOCK=/ssh-agent
+# ---- Secrets mount (prefers ~/.fluxforge/secrets if SECRETS_DIR not set) ----
+DEFAULT_SECRETS_DIR="${HOME}/.fluxforge/secrets"
+SECRETS_DIR_EFFECTIVE="${SECRETS_DIR:-$DEFAULT_SECRETS_DIR}"
+if [[ -d "${SECRETS_DIR_EFFECTIVE}" ]]; then
+  runargs+=( -v "${SECRETS_DIR_EFFECTIVE}:/secrets:ro" )
+  echo "[*] Mounting secrets from ${SECRETS_DIR_EFFECTIVE} -> /secrets (ro)"
+else
+  echo "[!] No secrets dir found at ${SECRETS_DIR_EFFECTIVE}. Codex will skip OPENAI_API_KEY from file."
+  echo "    Create it and add your key to ${SECRETS_DIR_EFFECTIVE}/openai_api_key"
+fi
+
+# ---- Optional: pass GH token via env (last resort; do not bake into image) ----
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  runargs+=( -e GITHUB_TOKEN )
+fi
+
+# Windows (Docker Desktop) SSH agent note:
+#   -v //./pipe/openssh-ssh-agent:/ssh-agent
+#   -e SSH_AUTH_SOCK=/ssh-agent
 
 exec docker run "${runargs[@]}" "${IMAGE_TAG}"
 
