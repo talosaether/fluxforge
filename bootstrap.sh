@@ -20,8 +20,13 @@ if command -v nvim >/dev/null 2>&1 && [[ -n "$REQ_NVIM" ]]; then
 fi
 
 # ---------- Known hosts so first git op doesn't prompt ----------
-ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null >> "${HOME}/.ssh/known_hosts" || true
-chmod 600 "${HOME}/.ssh/known_hosts" || true
+tmpkh="$(mktemp)"
+ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null > "${tmpkh}" || true
+touch "${HOME}/.ssh/known_hosts"
+cat "${tmpkh}" "${HOME}/.ssh/known_hosts" | awk '!seen[$0]++' > "${HOME}/.ssh/known_hosts.new" || true
+mv -f "${HOME}/.ssh/known_hosts.new" "${HOME}/.ssh/known_hosts"
+chmod 600 "${HOME}/.ssh/known_hosts"
+rm -f "${tmpkh}"
 
 # ---------- SSH agent (forwarded) ----------
 if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
@@ -149,19 +154,32 @@ fi
 # Ensure perms on home (harmless if already owned)
 chown -R "${USER_NAME}:${USER_NAME}" "${HOME}" 2>/dev/null || true
 
-# ---------- Clone requested repos into ephemeral workspace (supports @branch and depth) ----------
+
+# ---------- Clone requested repos into ephemeral workspace (supports @branch and #branch) ----------
 GIT_DEPTH="${GIT_DEPTH:-1}"
+
+parse_repo_spec() {
+  local spec="$1" url branch
+  if [[ "$spec" =~ ^(.+\.git)@([^@/]+)$ ]]; then
+    # Suffix form: ...repo.git@branch
+    url="${BASH_REMATCH[1]}"
+    branch="${BASH_REMATCH[2]}"
+  elif [[ "$spec" =~ ^(.+)\#([^/]+)$ ]]; then
+    # Alt delimiter to avoid SSH '@' collisions: ...repo.git#branch
+    url="${BASH_REMATCH[1]}"
+    branch="${BASH_REMATCH[2]}"
+  else
+    url="$spec"
+    branch=""
+  fi
+  printf '%s %s\n' "$url" "$branch"
+}
 
 IFS=',' read -ra repos <<< "${GIT_REPOS:-}"
 for spec in "${repos[@]}"; do
-  [[ -z "${spec}" ]] && continue
+  [[ -z "$spec" ]] && continue
 
-  url="${spec%%@*}"
-  ref=""
-  if [[ "${spec}" == *"@"* ]]; then
-    ref="${spec##*@}"
-  fi
-
+  read -r url ref < <(parse_repo_spec "$spec")
   name="$(basename "${url}" .git)"
   dest="/workspace/${name}"
 
@@ -169,18 +187,20 @@ for spec in "${repos[@]}"; do
     echo "[*] Cloning ${url} -> ${dest} ${ref:+(branch ${ref})}"
     if [[ -n "${ref}" ]]; then
       git clone --depth "${GIT_DEPTH}" --branch "${ref}" "${url}" "${dest}" || {
-        # fallback: clone default then fetch the branch
+        # Fallback: clone default then fetch the branch
         git clone --depth "${GIT_DEPTH}" "${url}" "${dest}" && \
         git -C "${dest}" fetch --depth "${GIT_DEPTH}" origin "${ref}" && \
         git -C "${dest}" switch -c "${ref}" --track "origin/${ref}"
       }
-      # make future fetches aware of the branch
       git -C "${dest}" remote set-branches --add origin "${ref}" || true
     else
       git clone --depth "${GIT_DEPTH}" "${url}" "${dest}"
     fi
   fi
 done
+
+
+
 
 # ---------- Start tmux + debug server ----------
 dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
