@@ -1,170 +1,353 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# user="${USER:-dev}"
-# home="/home/${user}"
 
-# Resolve user and home even if env isn't populated
-USER_NAME="${USER-}"
-if [[ -z "${USER_NAME}" ]]; then
-  USER_NAME="$(id -un 2>/dev/null || echo dev)"
-fi
+# ---------- Resolve USER/HOME early, even if env is empty ----------
+USER_NAME="${USER-}"; [[ -z "$USER_NAME" ]] && USER_NAME="$(id -un 2>/dev/null || echo dev)"
+HOME_DIR="${HOME-}"; [[ -z "$HOME_DIR" ]] && HOME_DIR="$(getent passwd "${USER_NAME}" 2>/dev/null | cut -d: -f6)"
+HOME_DIR="${HOME_DIR:-/home/${USER_NAME}}"
+export USER="${USER_NAME}" HOME="${HOME_DIR}"
 
-HOME_DIR="${HOME-}"
-if [[ -z "${HOME_DIR}" ]]; then
-  # Try to look up home from passwd; else fall back to /home/$USER_NAME
-  HOME_DIR="$(getent passwd "${USER_NAME}" 2>/dev/null | cut -d: -f6)"
-  HOME_DIR="${HOME_DIR:-/home/${USER_NAME}}"
-fi
+mkdir -p "${HOME}/.config" "${HOME}/.ssh" "/workspace"
+chmod 700 "${HOME}/.ssh"
 
-export USER="${USER_NAME}"
-export HOME="${HOME_DIR}"
-
-home="${HOME_DIR}"
-
-mkdir -p "${home}/.config" "${home}/.ssh" "/workspace"
-chmod 700 "${home}/.ssh"
-
-# near the top of bootstrap.sh, after HOME/USER is resolved
+# ---------- Neovim version gate (optional but recommended) ----------
 REQ_NVIM="${NVIM_VERSION:-}"
-if command -v nvim >/dev/null 2>&1 && [ -n "$REQ_NVIM" ]; then
+if command -v nvim >/dev/null 2>&1 && [[ -n "$REQ_NVIM" ]]; then
   if ! nvim --version | head -n1 | grep -q "NVIM v${REQ_NVIM}"; then
     echo "[!] Neovim version mismatch. Wanted ${REQ_NVIM}, got: $(nvim --version | head -n1)"
     exit 1
   fi
 fi
 
-# Pre-populate known_hosts for common forges to avoid interactive prompts - SSH host keys so first git clone doesn't prompt
-ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null >> "${home}/.ssh/known_hosts" || true
-chmod 600 "${home}/.ssh/known_hosts" || true
+# ---------- Known hosts so first git op doesn't prompt ----------
+ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null >> "${HOME}/.ssh/known_hosts" || true
+chmod 600 "${HOME}/.ssh/known_hosts" || true
 
-# If agent is present, keep it alive in tmux
+# ---------- SSH agent (forwarded) ----------
 if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
   export SSH_AUTH_SOCK
 fi
 
-# Configure Git identity if not already set by dotfiles
-git config --global user.name  "${GIT_USER_NAME:-${USER}}"      || true
-git config --global user.email "${GIT_USER_EMAIL:-${USER}@local}" || true
+# ---------- Git identity & transport prefs ----------
+git config --global user.name  "${GIT_USER_NAME:-${USER}}"            || true
+git config --global user.email "${GIT_USER_EMAIL:-${USER}@local}"     || true
 
-# Optional: prefer SSH for GitHub URLs automatically (safe if you use SSH keys)
+# Prefer SSH for forges when URLs are https (safe if you use SSH keys)
 if [[ "${GIT_AUTH_MODE:-ssh}" == "ssh" ]]; then
   git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
-  git config --global url."ssh://git@gitlab.com/".insteadOf "https://gitlab.com/"
+  git config --global url."ssh://git@gitlab.com/".insteadOf  "https://gitlab.com/"
 fi
 
-# If host forwarded an agent, ensure perms
-if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
-  export SSH_AUTH_SOCK
-fi
-
-# Secrets import (read-only mount from host)
+# ---------- Secrets import (read-only mount from host) ----------
 if [[ -d /secrets ]]; then
-  mkdir -p "${home}/.secrets"
-  cp -r /secrets/. "${home}/.secrets" 2>/dev/null || true
-  chmod -R go-rwx "${home}/.secrets" || true
+  mkdir -p "${HOME}/.secrets"
+  cp -r /secrets/. "${HOME}/.secrets" 2>/dev/null || true
+  chmod -R go-rwx "${HOME}/.secrets" || true
 fi
 
-# Dotfiles import
-if [[ -n "${DOTFILES_REPO:-}" ]]; then
-  git clone --depth=1 "${DOTFILES_REPO}" "${home}/.dotfiles" || true
-  if [[ "${DOTFILES_METHOD:-copy}" == "stow" ]]; then
-    sudo -n true 2>/dev/null || true
-    # stow might not exist; install if needed
-    if ! command -v stow >/dev/null 2>&1; then
-      echo "[*] Installing stow for dotfiles..."
-      # best-effort; container may not have sudo, so attempt apt directly
-      if command -v apt-get >/dev/null 2>&1; then
-        # shellcheck disable=SC2024
-        sudo apt-get update 2>/dev/null || true
-        sudo apt-get install -y stow 2>/dev/null || true
-      fi
-    fi
-    if command -v stow >/dev/null 2>&1; then
-      pushd "${home}/.dotfiles" >/dev/null
-      for pkg in ${DOTFILES_PACKAGES:-}; do stow -v -t "${home}" "${pkg}" || true; done
-      popd >/dev/null
-    fi
-  else
-    cp -a "${home}/.dotfiles/." "${home}/" || true
-  fi
-fi
-
-# HTTPS token helper (only kicks in for https remotes)
-if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITLAB_TOKEN:-}" || (-n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}") ]]; then
+# ---------- HTTPS token helper (only for https remotes) ----------
+if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITLAB_TOKEN:-}" || ( -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ) ]]; then
   install -m 0755 /dev/stdin /usr/local/bin/git-credential-passthru <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 action="${1:-get}"
-
-# Parse stdin: lines like key=value, blank line terminates
 host=""; protocol=""
-while IFS= read -r line; do
-  [[ -z "$line" ]] && break
-  case "$line" in
-    host=*) host="${line#host=}" ;;
-    protocol=*) protocol="${line#protocol=}" ;;
-  esac
-done
-
+while IFS= read -r line; do [[ -z "$line" ]] && break; case "$line" in host=*) host="${line#host=}";; protocol=*) protocol="${line#protocol=}";; esac; done
 if [[ "$action" == "get" ]]; then
   case "$host" in
-    github.com)
-      if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        echo "username=${GIT_USERNAME:-oauth2}"
-        echo "password=${GITHUB_TOKEN}"
-        echo
-        exit 0
-      fi
-      ;;
-    gitlab.com)
-      if [[ -n "${GITLAB_TOKEN:-}" ]]; then
-        echo "username=${GIT_USERNAME:-oauth2}"
-        echo "password=${GITLAB_TOKEN}"
-        echo
-        exit 0
-      fi
-      ;;
-    bitbucket.org)
-      if [[ -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ]]; then
-        echo "username=${BITBUCKET_USERNAME}"
-        echo "password=${BITBUCKET_APP_PASSWORD}"
-        echo
-        exit 0
-      fi
-      ;;
+    github.com)    [[ -n "${GITHUB_TOKEN:-}" ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITHUB_TOKEN}";    echo; exit 0; } ;;
+    gitlab.com)    [[ -n "${GITLAB_TOKEN:-}"  ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITLAB_TOKEN}";   echo; exit 0; } ;;
+    bitbucket.org) [[ -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ]] && { echo "username=${BITBUCKET_USERNAME}"; echo "password=${BITBUCKET_APP_PASSWORD}"; echo; exit 0; } ;;
   esac
 fi
-# No creds to offer
 exit 0
 EOF
-
   git config --global credential.helper "/usr/local/bin/git-credential-passthru"
-  # Avoid GUI askpass in headless envs; if we can't auth, fail fast
-  git config --global core.askPass ""
+  git config --global core.askPass ""   # fail fast, no GUI prompts in headless
 fi
 
-# Pull user repos into ephemeral workspace
+# ---------- Dotfiles import (Stow-first, copy fallback) ----------
+clone_update_repo() {
+  local url="$1" dest="$2" ref="${3:-}"
+  if [[ -d "$dest/.git" ]]; then
+    git -C "$dest" fetch --tags --prune origin || true
+    if [[ -n "$ref" ]]; then
+      git -C "$dest" checkout -q "$ref" || true
+      git -C "$dest" pull --ff-only      || true
+    else
+      # stay on current branch or fallback to main
+      git -C "$dest" checkout -q "$(git -C "$dest" symbolic-ref --short HEAD 2>/dev/null || echo main)" || true
+      git -C "$dest" pull --ff-only || true
+    fi
+  else
+    if [[ -n "$ref" ]]; then
+      git clone --depth 1 --branch "$ref" "$url" "$dest" || git clone "$url" "$dest"
+    else
+      git clone --depth 1 "$url" "$dest" || git clone "$url" "$dest"
+    fi
+  fi
+}
+
+if [[ -n "${DOTFILES_REPO:-}" ]]; then
+  DOTS_DIR="${HOME}/.dotfiles"
+  echo "[*] Importing dotfiles from ${DOTFILES_REPO} ${DOTFILES_REF:+(ref $DOTFILES_REF)}"
+  clone_update_repo "${DOTFILES_REPO}" "${DOTS_DIR}" "${DOTFILES_REF:-}"
+  METHOD="${DOTFILES_METHOD:-stow}"
+
+  if [[ "${METHOD}" == "stow" && ! $(command -v stow || true) ]]; then
+    echo "[!] stow not found; falling back to copy"
+    METHOD="copy"
+  fi
+
+  if [[ "${METHOD}" == "stow" ]]; then
+    pushd "${DOTS_DIR}" >/dev/null
+    for pkg in ${DOTFILES_PACKAGES:-}; do
+      [[ -d "$pkg" ]] || continue
+      echo "[*] stow $pkg"
+      stow ${DOTFILES_STOW_FLAGS:-} -t "${HOME}" "$pkg"
+    done
+    popd >/dev/null
+  else
+    echo "[*] Copying dotfiles"
+    cp -a "${DOTS_DIR}/." "${HOME}/" || true
+  fi
+fi
+
+# ---------- Minimal defaults if dotfiles didn't supply tmux/nvim ----------
+# tmux
+if [[ ! -f "${HOME}/.tmux.conf" && ! -f "${HOME}/.config/tmux/tmux.conf" ]]; then
+  echo "[*] Installing minimal tmux config"
+  mkdir -p "${HOME}/.config/tmux"
+  cat > "${HOME}/.config/tmux/tmux.conf" <<'TMUX'
+set -g mouse on
+set -g history-limit 10000
+bind -n C-h select-pane -L
+bind -n C-j select-pane -D
+bind -n C-k select-pane -U
+bind -n C-l select-pane -R
+set -g update-environment "SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION SSH_CLIENT USER HOME PATH"
+TMUX
+  ln -sf "${HOME}/.config/tmux/tmux.conf" "${HOME}/.tmux.conf"
+fi
+
+# nvim
+if [[ ! -f "${HOME}/.config/nvim/init.lua" ]]; then
+  echo "[*] Installing minimal nvim config"
+  mkdir -p "${HOME}/.config/nvim"
+  cat > "${HOME}/.config/nvim/init.lua" <<'NVIM'
+vim.o.number = true
+vim.o.relativenumber = true
+vim.o.termguicolors = true
+vim.o.expandtab = true
+vim.o.shiftwidth = 2
+vim.o.tabstop = 2
+NVIM
+fi
+
+# Ensure perms on home (harmless if already owned)
+chown -R "${USER_NAME}:${USER_NAME}" "${HOME}" 2>/dev/null || true
+
+# ---------- Clone requested repos into ephemeral workspace ----------
 IFS=',' read -ra repos <<< "${GIT_REPOS:-}"
 for spec in "${repos[@]}"; do
   [[ -z "${spec}" ]] && continue
-  name="$(basename "${spec}" .git)"
+  name="$(basename "${spec%%@*}" .git)"
   dest="/workspace/${name}"
   if [[ ! -d "${dest}/.git" ]]; then
     echo "[*] Cloning ${spec} -> ${dest}"
-    git clone --depth 1 "${spec}" "${dest}" || true
+    git clone --depth 1 "${spec%%@*}" "${dest}" || true
   fi
 done
 
-# Default debug command
+# ---------- Start tmux + debug server ----------
 dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
 session="${TMUX_SESSION:-dev}"
 
-# Tmux layout: editor + server
+# Start tmux server, seed env, then create windows so panes inherit SSH_AUTH_SOCK etc.
+tmux start-server
+tmux set-environment -g SSH_AUTH_SOCK "${SSH_AUTH_SOCK:-}" 2>/dev/null || true
+tmux set-environment -g USER "${USER}"
+tmux set-environment -g HOME "${HOME}"
+tmux set-environment -g PATH "${PATH}"
+
 tmux new-session -d -s "${session}" -n editor "cd /workspace && nvim"
-tmux new-window -t "${session}:" -n server "cd /workspace && ${dbg}"
+tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
 tmux select-window -t "${session}:editor"
 exec tmux attach -t "${session}"
+#!/usr/bin/env bash
+set -euo pipefail
 
-# ...later, after starting tmux session...
+# ---------- Resolve USER/HOME early, even if env is empty ----------
+USER_NAME="${USER-}"; [[ -z "$USER_NAME" ]] && USER_NAME="$(id -un 2>/dev/null || echo dev)"
+HOME_DIR="${HOME-}"; [[ -z "$HOME_DIR" ]] && HOME_DIR="$(getent passwd "${USER_NAME}" 2>/dev/null | cut -d: -f6)"
+HOME_DIR="${HOME_DIR:-/home/${USER_NAME}}"
+export USER="${USER_NAME}" HOME="${HOME_DIR}"
+
+mkdir -p "${HOME}/.config" "${HOME}/.ssh" "/workspace"
+chmod 700 "${HOME}/.ssh"
+
+# ---------- Neovim version gate (optional but recommended) ----------
+REQ_NVIM="${NVIM_VERSION:-}"
+if command -v nvim >/dev/null 2>&1 && [[ -n "$REQ_NVIM" ]]; then
+  if ! nvim --version | head -n1 | grep -q "NVIM v${REQ_NVIM}"; then
+    echo "[!] Neovim version mismatch. Wanted ${REQ_NVIM}, got: $(nvim --version | head -n1)"
+    exit 1
+  fi
+fi
+
+# ---------- Known hosts so first git op doesn't prompt ----------
+ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null >> "${HOME}/.ssh/known_hosts" || true
+chmod 600 "${HOME}/.ssh/known_hosts" || true
+
+# ---------- SSH agent (forwarded) ----------
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+  export SSH_AUTH_SOCK
+fi
+
+# ---------- Git identity & transport prefs ----------
+git config --global user.name  "${GIT_USER_NAME:-${USER}}"            || true
+git config --global user.email "${GIT_USER_EMAIL:-${USER}@local}"     || true
+
+# Prefer SSH for forges when URLs are https (safe if you use SSH keys)
+if [[ "${GIT_AUTH_MODE:-ssh}" == "ssh" ]]; then
+  git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
+  git config --global url."ssh://git@gitlab.com/".insteadOf  "https://gitlab.com/"
+fi
+
+# ---------- Secrets import (read-only mount from host) ----------
+if [[ -d /secrets ]]; then
+  mkdir -p "${HOME}/.secrets"
+  cp -r /secrets/. "${HOME}/.secrets" 2>/dev/null || true
+  chmod -R go-rwx "${HOME}/.secrets" || true
+fi
+
+# ---------- HTTPS token helper (only for https remotes) ----------
+if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITLAB_TOKEN:-}" || ( -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ) ]]; then
+  install -m 0755 /dev/stdin /usr/local/bin/git-credential-passthru <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+action="${1:-get}"
+host=""; protocol=""
+while IFS= read -r line; do [[ -z "$line" ]] && break; case "$line" in host=*) host="${line#host=}";; protocol=*) protocol="${line#protocol=}";; esac; done
+if [[ "$action" == "get" ]]; then
+  case "$host" in
+    github.com)    [[ -n "${GITHUB_TOKEN:-}" ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITHUB_TOKEN}";    echo; exit 0; } ;;
+    gitlab.com)    [[ -n "${GITLAB_TOKEN:-}"  ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITLAB_TOKEN}";   echo; exit 0; } ;;
+    bitbucket.org) [[ -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ]] && { echo "username=${BITBUCKET_USERNAME}"; echo "password=${BITBUCKET_APP_PASSWORD}"; echo; exit 0; } ;;
+  esac
+fi
+exit 0
+EOF
+  git config --global credential.helper "/usr/local/bin/git-credential-passthru"
+  git config --global core.askPass ""   # fail fast, no GUI prompts in headless
+fi
+
+# ---------- Dotfiles import (Stow-first, copy fallback) ----------
+clone_update_repo() {
+  local url="$1" dest="$2" ref="${3:-}"
+  if [[ -d "$dest/.git" ]]; then
+    git -C "$dest" fetch --tags --prune origin || true
+    if [[ -n "$ref" ]]; then
+      git -C "$dest" checkout -q "$ref" || true
+      git -C "$dest" pull --ff-only      || true
+    else
+      # stay on current branch or fallback to main
+      git -C "$dest" checkout -q "$(git -C "$dest" symbolic-ref --short HEAD 2>/dev/null || echo main)" || true
+      git -C "$dest" pull --ff-only || true
+    fi
+  else
+    if [[ -n "$ref" ]]; then
+      git clone --depth 1 --branch "$ref" "$url" "$dest" || git clone "$url" "$dest"
+    else
+      git clone --depth 1 "$url" "$dest" || git clone "$url" "$dest"
+    fi
+  fi
+}
+
+if [[ -n "${DOTFILES_REPO:-}" ]]; then
+  DOTS_DIR="${HOME}/.dotfiles"
+  echo "[*] Importing dotfiles from ${DOTFILES_REPO} ${DOTFILES_REF:+(ref $DOTFILES_REF)}"
+  clone_update_repo "${DOTFILES_REPO}" "${DOTS_DIR}" "${DOTFILES_REF:-}"
+  METHOD="${DOTFILES_METHOD:-stow}"
+
+  if [[ "${METHOD}" == "stow" && ! $(command -v stow || true) ]]; then
+    echo "[!] stow not found; falling back to copy"
+    METHOD="copy"
+  fi
+
+  if [[ "${METHOD}" == "stow" ]]; then
+    pushd "${DOTS_DIR}" >/dev/null
+    for pkg in ${DOTFILES_PACKAGES:-}; do
+      [[ -d "$pkg" ]] || continue
+      echo "[*] stow $pkg"
+      stow ${DOTFILES_STOW_FLAGS:-} -t "${HOME}" "$pkg"
+    done
+    popd >/dev/null
+  else
+    echo "[*] Copying dotfiles"
+    cp -a "${DOTS_DIR}/." "${HOME}/" || true
+  fi
+fi
+
+# ---------- Minimal defaults if dotfiles didn't supply tmux/nvim ----------
+# tmux
+if [[ ! -f "${HOME}/.tmux.conf" && ! -f "${HOME}/.config/tmux/tmux.conf" ]]; then
+  echo "[*] Installing minimal tmux config"
+  mkdir -p "${HOME}/.config/tmux"
+  cat > "${HOME}/.config/tmux/tmux.conf" <<'TMUX'
+set -g mouse on
+set -g history-limit 10000
+bind -n C-h select-pane -L
+bind -n C-j select-pane -D
+bind -n C-k select-pane -U
+bind -n C-l select-pane -R
+set -g update-environment "SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION SSH_CLIENT USER HOME PATH"
+TMUX
+  ln -sf "${HOME}/.config/tmux/tmux.conf" "${HOME}/.tmux.conf"
+fi
+
+# nvim
+if [[ ! -f "${HOME}/.config/nvim/init.lua" ]]; then
+  echo "[*] Installing minimal nvim config"
+  mkdir -p "${HOME}/.config/nvim"
+  cat > "${HOME}/.config/nvim/init.lua" <<'NVIM'
+vim.o.number = true
+vim.o.relativenumber = true
+vim.o.termguicolors = true
+vim.o.expandtab = true
+vim.o.shiftwidth = 2
+vim.o.tabstop = 2
+NVIM
+fi
+
+# Ensure perms on home (harmless if already owned)
+chown -R "${USER_NAME}:${USER_NAME}" "${HOME}" 2>/dev/null || true
+
+# ---------- Clone requested repos into ephemeral workspace ----------
+IFS=',' read -ra repos <<< "${GIT_REPOS:-}"
+for spec in "${repos[@]}"; do
+  [[ -z "${spec}" ]] && continue
+  name="$(basename "${spec%%@*}" .git)"
+  dest="/workspace/${name}"
+  if [[ ! -d "${dest}/.git" ]]; then
+    echo "[*] Cloning ${spec} -> ${dest}"
+    git clone --depth 1 "${spec%%@*}" "${dest}" || true
+  fi
+done
+
+# ---------- Start tmux + debug server ----------
+dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
+session="${TMUX_SESSION:-dev}"
+
+# Start tmux server, seed env, then create windows so panes inherit SSH_AUTH_SOCK etc.
+tmux start-server
 tmux set-environment -g SSH_AUTH_SOCK "${SSH_AUTH_SOCK:-}" 2>/dev/null || true
+tmux set-environment -g USER "${USER}"
+tmux set-environment -g HOME "${HOME}"
+tmux set-environment -g PATH "${PATH}"
+
+tmux new-session -d -s "${session}" -n editor "cd /workspace && nvim"
+tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
+tmux select-window -t "${session}:editor"
+exec tmux attach -t "${session}"
 
