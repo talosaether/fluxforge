@@ -55,10 +55,6 @@ RUN set -eux; \
   fi; \
   nvim --version | head -n1 | grep -q "NVIM v${NVIM_VERSION}"
 
-# defaults for tmux and nvim
-COPY tmux.conf /etc/tmux.conf
-COPY --chown=${USERNAME}:${USERNAME} nvim/ /home/${USERNAME}/.config/nvim/
-
 # bootstrap logic
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh && chown -R ${USERNAME}:${USERNAME} /workspace
