@@ -65,7 +65,7 @@ RUN set -eux; \
     arm64)  COD_ARCH="aarch64-unknown-linux-musl" ;; \
     *) echo "Unsupported arch: $arch"; exit 1 ;; \
   esac; \
-  curl -fsSL "https://github.com/openai/codex/releases/download/v${CODEX_VERSION}/codex-${COD_ARCH}.tar.gz" \
+  curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${COD_ARCH}.tar.gz" \
   | tar -xz -C /usr/local/bin; \
   mv /usr/local/bin/codex-* /usr/local/bin/codex; \
   chmod +x /usr/local/bin/codex
