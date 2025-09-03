@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ---------- Resolve USER/HOME early, even if env is empty ----------
+# ---------- Resolve USER/HOME early ----------
 USER_NAME="${USER-}"; [[ -z "$USER_NAME" ]] && USER_NAME="$(id -un 2>/dev/null || echo dev)"
 HOME_DIR="${HOME-}"; [[ -z "$HOME_DIR" ]] && HOME_DIR="$(getent passwd "${USER_NAME}" 2>/dev/null | cut -d: -f6)"
 HOME_DIR="${HOME_DIR:-/home/${USER_NAME}}"
 export USER="${USER_NAME}" HOME="${HOME_DIR}"
 
-mkdir -p "${HOME}/.config" "${HOME}/.ssh" "/workspace"
+mkdir -p "${HOME}/.config" "${HOME}/.ssh" "/workspace" "${HOME}/.local/bin"
 chmod 700 "${HOME}/.ssh"
 
 # ---------- Neovim version gate (optional but recommended) ----------
@@ -19,7 +19,7 @@ if command -v nvim >/dev/null 2>&1 && [[ -n "$REQ_NVIM" ]]; then
   fi
 fi
 
-# ---------- Known hosts so first git op doesn't prompt ----------
+# ---------- Known hosts (deduped) ----------
 tmpkh="$(mktemp)"
 ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null > "${tmpkh}" || true
 touch "${HOME}/.ssh/known_hosts"
@@ -37,7 +37,6 @@ fi
 git config --global user.name  "${GIT_USER_NAME:-${USER}}"            || true
 git config --global user.email "${GIT_USER_EMAIL:-${USER}@local}"     || true
 
-# Prefer SSH for forges when URLs are https (safe if you use SSH keys)
 if [[ "${GIT_AUTH_MODE:-ssh}" == "ssh" ]]; then
   git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
   git config --global url."ssh://git@gitlab.com/".insteadOf  "https://gitlab.com/"
@@ -50,9 +49,9 @@ if [[ -d /secrets ]]; then
   chmod -R go-rwx "${HOME}/.secrets" || true
 fi
 
-# ---------- HTTPS token helper (only for https remotes) ----------
+# ---------- HTTPS token helper (only if tokens are present) ----------
 if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITLAB_TOKEN:-}" || ( -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ) ]]; then
-  install -m 0755 /dev/stdin /usr/local/bin/git-credential-passthru <<'EOF'
+  install -m 0755 /dev/stdin "${HOME}/.local/bin/git-credential-passthru" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 action="${1:-get}"
@@ -60,15 +59,15 @@ host=""; protocol=""
 while IFS= read -r line; do [[ -z "$line" ]] && break; case "$line" in host=*) host="${line#host=}";; protocol=*) protocol="${line#protocol=}";; esac; done
 if [[ "$action" == "get" ]]; then
   case "$host" in
-    github.com)    [[ -n "${GITHUB_TOKEN:-}" ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITHUB_TOKEN}";    echo; exit 0; } ;;
-    gitlab.com)    [[ -n "${GITLAB_TOKEN:-}"  ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITLAB_TOKEN}";   echo; exit 0; } ;;
+    github.com)    [[ -n "${GITHUB_TOKEN:-}" ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITHUB_TOKEN}"; echo; exit 0; } ;;
+    gitlab.com)    [[ -n "${GITLAB_TOKEN:-}"  ]] && { echo "username=${GIT_USERNAME:-oauth2}"; echo "password=${GITLAB_TOKEN}"; echo; exit 0; } ;;
     bitbucket.org) [[ -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ]] && { echo "username=${BITBUCKET_USERNAME}"; echo "password=${BITBUCKET_APP_PASSWORD}"; echo; exit 0; } ;;
   esac
 fi
 exit 0
 EOF
-  git config --global credential.helper "/usr/local/bin/git-credential-passthru"
-  git config --global core.askPass ""   # fail fast, no GUI prompts in headless
+  git config --global credential.helper "${HOME}/.local/bin/git-credential-passthru"
+  git config --global core.askPass ""   # headless: fail fast
 fi
 
 # ---------- Dotfiles import (Stow-first, copy fallback) ----------
@@ -78,9 +77,8 @@ clone_update_repo() {
     git -C "$dest" fetch --tags --prune origin || true
     if [[ -n "$ref" ]]; then
       git -C "$dest" checkout -q "$ref" || true
-      git -C "$dest" pull --ff-only      || true
+      git -C "$dest" pull --ff-only || true
     else
-      # stay on current branch or fallback to main
       git -C "$dest" checkout -q "$(git -C "$dest" symbolic-ref --short HEAD 2>/dev/null || echo main)" || true
       git -C "$dest" pull --ff-only || true
     fi
@@ -122,27 +120,23 @@ fi
 
 # --- tmux preflight: ensure TPM and sane paths ---
 export TMUX_PLUGIN_MANAGER_PATH="${TMUX_PLUGIN_MANAGER_PATH:-$HOME/.tmux/plugins}"
-
 if [[ ! -x "$TMUX_PLUGIN_MANAGER_PATH/tpm/tpm" ]]; then
   echo "[*] Installing TPM"
   git clone --depth 1 https://github.com/tmux-plugins/tpm "$TMUX_PLUGIN_MANAGER_PATH/tpm" || true
 fi
 
-# If your tmux.conf hardcodes a default-shell that isn't installed, avoid crashy panes
 TMUX_CONF=""
 [[ -f "$HOME/.tmux.conf" ]] && TMUX_CONF="$HOME/.tmux.conf"
 [[ -z "$TMUX_CONF" && -f "$HOME/.config/tmux/tmux.conf" ]] && TMUX_CONF="$HOME/.config/tmux/tmux.conf"
 
 if [[ -n "$TMUX_CONF" ]]; then
-  # Grab the last field on the default-shell line and strip surrounding quotes, if any
+  # If default-shell in config is missing, fall back to bash
   dshell="$(awk '/^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+default-shell/ {print $NF}' "$TMUX_CONF" 2>/dev/null \
-            | sed -e "s/^['\"]//" -e "s/['\"]$//" \
-            | head -n1)"
+            | sed -e "s/^['\"]//" -e "s/['\"]$//" | head -n1)"
   [[ -n "$dshell" && ! -x "$dshell" ]] && export TMUX_FORCE_DEFAULT_SHELL="/bin/bash"
 fi
 
-# ---------- Minimal defaults if dotfiles didn't supply tmux/nvim ----------
-# tmux
+# ---------- Minimal defaults if user provided none ----------
 if [[ ! -f "${HOME}/.tmux.conf" && ! -f "${HOME}/.config/tmux/tmux.conf" ]]; then
   echo "[*] Installing minimal tmux config"
   mkdir -p "${HOME}/.config/tmux"
@@ -158,7 +152,6 @@ TMUX
   ln -sf "${HOME}/.config/tmux/tmux.conf" "${HOME}/.tmux.conf"
 fi
 
-# nvim
 if [[ ! -f "${HOME}/.config/nvim/init.lua" ]]; then
   echo "[*] Installing minimal nvim config"
   mkdir -p "${HOME}/.config/nvim"
@@ -172,25 +165,20 @@ vim.o.tabstop = 2
 NVIM
 fi
 
-# Ensure perms on home (harmless if already owned)
+# ---------- Permissions ----------
 chown -R "${USER_NAME}:${USER_NAME}" "${HOME}" 2>/dev/null || true
 
-# ---------- Clone requested repos into ephemeral workspace (supports @branch and #branch) ----------
+# ---------- Clone requested repos (supports @branch and #branch) ----------
 GIT_DEPTH="${GIT_DEPTH:-1}"
 
 parse_repo_spec() {
   local spec="$1" url branch
   if [[ "$spec" =~ ^(.+\.git)@([^@/]+)$ ]]; then
-    # Suffix form: ...repo.git@branch
-    url="${BASH_REMATCH[1]}"
-    branch="${BASH_REMATCH[2]}"
+    url="${BASH_REMATCH[1]}"; branch="${BASH_REMATCH[2]}"
   elif [[ "$spec" =~ ^(.+)\#([^/]+)$ ]]; then
-    # Alt delimiter to avoid SSH '@' collisions: ...repo.git#branch
-    url="${BASH_REMATCH[1]}"
-    branch="${BASH_REMATCH[2]}"
+    url="${BASH_REMATCH[1]}"; branch="${BASH_REMATCH[2]}"
   else
-    url="$spec"
-    branch=""
+    url="$spec"; branch=""
   fi
   printf '%s %s\n' "$url" "$branch"
 }
@@ -198,16 +186,13 @@ parse_repo_spec() {
 IFS=',' read -ra repos <<< "${GIT_REPOS:-}"
 for spec in "${repos[@]}"; do
   [[ -z "$spec" ]] && continue
-
   read -r url ref < <(parse_repo_spec "$spec")
   name="$(basename "${url}" .git)"
   dest="/workspace/${name}"
-
   if [[ ! -d "${dest}/.git" ]]; then
     echo "[*] Cloning ${url} -> ${dest} ${ref:+(branch ${ref})}"
     if [[ -n "${ref}" ]]; then
       git clone --depth "${GIT_DEPTH}" --branch "${ref}" "${url}" "${dest}" || {
-        # Fallback: clone default then fetch the branch
         git clone --depth "${GIT_DEPTH}" "${url}" "${dest}" && \
         git -C "${dest}" fetch --depth "${GIT_DEPTH}" origin "${ref}" && \
         git -C "${dest}" switch -c "${ref}" --track "origin/${ref}"
@@ -219,26 +204,42 @@ for spec in "${repos[@]}"; do
   fi
 done
 
-# ---------- Start tmux + debug server (bulletproof) ----------
-dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
-session="${TMUX_SESSION:-dev}"
-
-# Make sure tmux has a writable socket directory (stop touching /tmp)
+# ---------- Headless TPM plugin install (silent) ----------
 export TMUX_TMPDIR="${TMUX_TMPDIR:-$HOME/.tmux-tmp}"
 mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR" || true
 
-# Minimal env so tmux doesn't choke
-export SHELL="${SHELL:-/bin/bash}"
-export TERM="${TERM:-xterm-256color}"
+missing=0
+if [[ -n "${TMUX_CONF:-}" ]]; then
+  while IFS= read -r repo; do
+    [[ -z "$repo" ]] && continue
+    base="${repo##*/}"
+    [[ -d "$TMUX_PLUGIN_MANAGER_PATH/$base" ]] || { missing=1; break; }
+  done < <(awk -F"'" '/@plugin[[:space:]]/ {print $2}' "$TMUX_CONF" 2>/dev/null)
+fi
 
-# Start a server that ignores user config (prevents bad configs from killing it)
+if [[ $missing -eq 1 && -x "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" ]]; then
+  sock="tpm-setup"
+  TMUX_TMPDIR="$TMUX_TMPDIR" tmux -L "$sock" -f /dev/null new-session -d -s "$sock" "sleep 2"
+  TMUX_TMPDIR="$TMUX_TMPDIR" tmux -L "$sock" source-file "$TMUX_CONF" >/dev/null 2>&1 || true
+  TMUX_PLUGIN_MANAGER_PATH="$TMUX_PLUGIN_MANAGER_PATH" TMUX_TMPDIR="$TMUX_TMPDIR" \
+    tmux -L "$sock" run-shell "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" >/dev/null 2>&1 || true
+  tmux -L "$sock" kill-server
+fi
+
+# ---------- Start tmux + debug server (quiet, resilient) ----------
+dbg="${DEBUG_COMMAND:-python3 -m http.server 8000}"
+session="${TMUX_SESSION:-dev}"
+
+# Clean server ignoring user config, then seed env
 tmux -f /dev/null start-server >/dev/null 2>&1 || true
-
-# Seed env into server if it's running
 tmux set-environment -g SSH_AUTH_SOCK "${SSH_AUTH_SOCK:-}" >/dev/null 2>&1 || true
 tmux set-environment -g USER "${USER}" >/dev/null 2>&1 || true
 tmux set-environment -g HOME "${HOME}" >/dev/null 2>&1 || true
 tmux set-environment -g PATH "${PATH}" >/dev/null 2>&1 || true
+tmux set-environment -g TMUX_PLUGIN_MANAGER_PATH "${TMUX_PLUGIN_MANAGER_PATH}" >/dev/null 2>&1 || true
+
+# Honor fallback shell if dotfiles pointed at a missing one
+[[ -n "${TMUX_FORCE_DEFAULT_SHELL:-}" ]] && tmux set -g default-shell "${TMUX_FORCE_DEFAULT_SHELL}" >/dev/null 2>&1 || true
 
 # Create session if missing
 if ! tmux has-session -t "${session}" >/dev/null 2>&1; then
@@ -246,17 +247,11 @@ if ! tmux has-session -t "${session}" >/dev/null 2>&1; then
   tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
 fi
 
-# seed plugin path and fallback shell into server env
-tmux set-environment -g TMUX_PLUGIN_MANAGER_PATH "${TMUX_PLUGIN_MANAGER_PATH}" >/dev/null 2>&1 || true
-[[ -n "${TMUX_FORCE_DEFAULT_SHELL:-}" ]] && tmux set -g default-shell "${TMUX_FORCE_DEFAULT_SHELL}" >/dev/null 2>&1 || true
-
-# source user config
-tmux source-file "${TMUX_CONF}" >/dev/null 2>&1 || echo "[!] tmux config had errors; using defaults"
-
-# install plugins now that TPM exists
-if [[ -x "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" ]]; then
-  tmux run-shell "$TMUX_PLUGIN_MANAGER_PATH/tpm/bin/install_plugins" >/dev/null 2>&1 || true
+# Source user config; ignore errors so you still get a session
+if [[ -n "${TMUX_CONF:-}" ]]; then
+  tmux source-file "${TMUX_CONF}" >/dev/null 2>&1 || echo "[!] tmux config had errors; using defaults"
 fi
 
+# Attach
 exec tmux attach -t "${session}"
 
