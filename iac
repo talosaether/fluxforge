@@ -60,8 +60,7 @@ if [[ -d "${SECRETS_DIR_EFFECTIVE}" ]]; then
   runargs+=( -v "${SECRETS_DIR_EFFECTIVE}:/secrets:ro" )
   echo "[*] Mounting secrets from ${SECRETS_DIR_EFFECTIVE} -> /secrets (ro)"
 else
-  echo "[!] No secrets dir found at ${SECRETS_DIR_EFFECTIVE}. Codex will skip OPENAI_API_KEY from file."
-  echo "    Create it and add your key to ${SECRETS_DIR_EFFECTIVE}/openai_api_key"
+  echo "[!] No secrets dir found at ${SECRETS_DIR_EFFECTIVE}."
 fi
 
 # ---- Optional: pass GH token via env (last resort; do not bake into image) ----

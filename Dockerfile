@@ -55,29 +55,6 @@ RUN set -eux; \
   fi; \
   nvim --version | head -n1 | grep -q "NVIM v${NVIM_VERSION}"
 
-# --- Codex CLI + wrapper ---
-ARG CODEX_VERSION=0.28.0
-# Optional: install the static binary now. Comment out if you prefer bootstrap-time install.
-RUN set -eux; \
-  arch="$(dpkg --print-architecture)"; \
-  case "$arch" in \
-    amd64)  COD_ARCH="x86_64-unknown-linux-musl" ;; \
-    arm64)  COD_ARCH="aarch64-unknown-linux-musl" ;; \
-    *) echo "Unsupported arch: $arch"; exit 1 ;; \
-  esac; \
-  curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${COD_ARCH}.tar.gz" \
-  | tar -xz -C /usr/local/bin; \
-  mv /usr/local/bin/codex-* /usr/local/bin/codex; \
-  chmod +x /usr/local/bin/codex
-
-# The wrapper that nails Codex to /workspace
-RUN install -m 0755 /dev/stdin /usr/local/bin/ff-codex <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-# Force Codex’s working root and keep approvals contained to /workspace
-exec codex --cd /workspace --approval-mode auto "$@"
-SH
-
 # bootstrap logic
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh && chown -R ${USERNAME}:${USERNAME} /workspace

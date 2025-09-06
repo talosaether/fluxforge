@@ -49,17 +49,6 @@ if [[ -d /secrets ]]; then
   chmod -R go-rwx "${HOME}/.secrets" || true
 fi
 
-# --- Codex/OpenAI key wiring ---
-# Prefer env, else read from secrets file (either location)
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  for p in "${HOME}/.secrets/openai_api_key" "/secrets/openai_api_key"; do
-    if [[ -f "$p" ]]; then
-      OPENAI_API_KEY="$(<"$p")"; export OPENAI_API_KEY
-      break
-    fi
-  done
-fi
-
 # ---------- HTTPS token helper (only if tokens are present) ----------
 if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITLAB_TOKEN:-}" || ( -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_APP_PASSWORD:-}" ) ]]; then
   install -m 0755 /dev/stdin "${HOME}/.local/bin/git-credential-passthru" <<'EOF'
@@ -128,42 +117,6 @@ if [[ -n "${DOTFILES_REPO:-}" ]]; then
     cp -a "${DOTS_DIR}/." "${HOME}/" || true
   fi
 fi
-
-
-# --- Codex CLI: ensure installed, auth, and wrapper presence ---
-
-# 0) Wrapper safety net (in case image missed it)
-if [[ ! -x /usr/local/bin/ff-codex ]]; then
-  install -m 0755 /dev/stdin /usr/local/bin/ff-codex <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-exec codex --cd /workspace --approval-mode auto "$@"
-SH
-fi
-
-# 1) Install CLI if missing (optional, controlled by env)
-#    Provide CODEX_URL yourself if you don’t want me guessing releases.
-if ! command -v codex >/dev/null 2>&1; then
-  if [[ -n "${CODEX_URL:-}" ]]; then
-    echo "[*] Installing Codex CLI from \$CODEX_URL"
-    curl -fsSL "$CODEX_URL" | tar -xz -C /usr/local/bin
-    # If the tarball extracts a versioned filename, normalize it:
-    [[ -f /usr/local/bin/codex ]] || mv /usr/local/bin/codex-* /usr/local/bin/codex 2>/dev/null || true
-    chmod +x /usr/local/bin/codex || true
-  else
-    echo "[!] Codex CLI not found and CODEX_URL not set; skipping install"
-  fi
-fi
-
-# 2) Auth: prefer OPENAI_API_KEY from env or /secrets
-if [[ -z "${OPENAI_API_KEY:-}" && -f "${HOME}/.secrets/openai_api_key" ]]; then
-  export OPENAI_API_KEY="$(< "${HOME}/.secrets/openai_api_key")"
-fi
-mkdir -p "${HOME}/.codex"
-[[ -f "${HOME}/.codex/config.toml" ]] || cat > "${HOME}/.codex/config.toml" <<'TOML'
-# ~/.codex/config.toml
-# Keep minimal; CLI flags override this.
-TOML
 
 # --- tmux preflight: ensure TPM and sane paths ---
 export TMUX_PLUGIN_MANAGER_PATH="${TMUX_PLUGIN_MANAGER_PATH:-$HOME/.tmux/plugins}"
@@ -286,7 +239,6 @@ tmux set-environment -g USER "${USER}" >/dev/null 2>&1 || true
 tmux set-environment -g HOME "${HOME}" >/dev/null 2>&1 || true
 tmux set-environment -g PATH "${PATH}" >/dev/null 2>&1 || true
 tmux set-environment -g TMUX_PLUGIN_MANAGER_PATH "${TMUX_PLUGIN_MANAGER_PATH}" >/dev/null 2>&1 || true
-[[ -n "${OPENAI_API_KEY:-}" ]] && tmux set-environment -g OPENAI_API_KEY "${OPENAI_API_KEY}" >/dev/null 2>&1 || true
 
 # Honor fallback shell if dotfiles pointed at a missing one
 [[ -n "${TMUX_FORCE_DEFAULT_SHELL:-}" ]] && tmux set -g default-shell "${TMUX_FORCE_DEFAULT_SHELL}" >/dev/null 2>&1 || true
@@ -295,11 +247,6 @@ tmux set-environment -g TMUX_PLUGIN_MANAGER_PATH "${TMUX_PLUGIN_MANAGER_PATH}" >
 if ! tmux has-session -t "${session}" >/dev/null 2>&1; then
   tmux new-session -d -s "${session}" -n editor "cd /workspace && nvim"
   tmux new-window  -t "${session}:" -n server "cd /workspace && ${dbg}"
-fi
-
-# After creating editor + server:
-if command -v codex >/dev/null 2>&1; then
-  tmux new-window -t "${session}:" -n codex "cd /workspace && ff-codex"
 fi
 
 # Source user config; ignore errors so you still get a session
