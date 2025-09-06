@@ -1,6 +1,6 @@
 # fluxforge
 
-**Ephemeral development environments** - A containerized development workspace that spins up fully configured development environments with Neovim, tmux, Codex CLI, and seamless Git integration.
+**Ephemeral development environments** - A containerized development workspace that spins up fully configured development environments with Neovim, tmux, and seamless Git integration.
 
 ## Overview
 
@@ -8,7 +8,6 @@ fluxforge creates isolated, reproducible development environments using Docker c
 
 - **Neovim** (pinned version 0.10.2) with minimal sensible defaults
 - **tmux** with TPM plugin manager and keyboard-friendly navigation
-- **Codex CLI** (OpenAI's AI coding assistant) with workspace integration
 - **Git** with SSH/HTTPS authentication support and credential helpers
 - **Development tools**: ripgrep, fd-find, yq, jq, Python3, and more
 
@@ -20,7 +19,6 @@ The environment automatically handles SSH agent forwarding, secrets management, 
 
 - Docker installed and running
 - SSH agent running (for private repository access)
-- Optional: OpenAI API key for Codex CLI functionality
 
 ### Quick Start
 
@@ -117,8 +115,6 @@ The container will automatically mount this directory and configure Codex CLI wi
 | `GITLAB_TOKEN` | `""` | GitLab personal access token |
 | `BITBUCKET_USERNAME` | `""` | Bitbucket username |
 | `BITBUCKET_APP_PASSWORD` | `""` | Bitbucket app password |
-| `OPENAI_API_KEY` | `""` | OpenAI API key for Codex CLI |
-| `CODEX_URL` | `""` | Custom URL for Codex CLI download |
 | `SECRETS_DIR` | `~/.dev-secrets` | Directory containing secrets |
 | `SSH_AUTH_SOCK` | `""` | SSH agent socket (auto-detected) |
 
